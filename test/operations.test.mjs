@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ControlDClient } from "../dist/client.js";
-import { createRules, resolveProfile, setPause } from "../dist/operations.js";
+import {
+  createRules,
+  recentActivity,
+  resolveProfile,
+  setPause,
+} from "../dist/operations.js";
 
 const config = {
   apiToken: "test-secret",
@@ -82,4 +87,40 @@ test("bypass creation normalizes domains and verifies the result", async (contex
   assert.deepEqual(posted.hostnames, ["cdn.example.com"]);
   assert.equal(posted.do, 1);
   assert.equal(result.verifiedRules.length, 1);
+});
+
+test("activity uses zero-based paging and filters blocked rows locally", async () => {
+  let requestedParams;
+  const now = Date.now();
+  const client = {
+    analytics: async (params) => {
+      requestedParams = params;
+      return {
+        success: true,
+        body: {
+          queries: [
+            {
+              timestamp: new Date(now - 60_000).toISOString(),
+              question: "blocked.example",
+              action: 0,
+            },
+            {
+              timestamp: new Date(now - 30_000).toISOString(),
+              question: "allowed.example",
+              action: 1,
+            },
+          ],
+          meta: { page: 0 },
+        },
+      };
+    },
+  };
+
+  const result = await recentActivity(client, 15, 50, true);
+  assert.equal(requestedParams.get("page"), "0");
+  assert.equal(requestedParams.get("pageSize"), "200");
+  assert.equal(requestedParams.has("action"), false);
+  assert.equal(result.queries.length, 1);
+  assert.equal(result.queries[0].question, "blocked.example");
+  assert.equal(result.meta.scannedQueryCount, 2);
 });

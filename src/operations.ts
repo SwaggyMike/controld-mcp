@@ -242,18 +242,33 @@ export async function recentActivity(
   const params = new URLSearchParams({
     startTime: start.toISOString(),
     endTime: end.toISOString(),
-    page: "1",
-    pageSize: String(limit),
+    page: "0",
+    pageSize: "200",
   });
-  if (blockedOnly) params.set("action", "0");
   if (endpointId) params.set("endpointId", endpointId);
   if (search) params.set("searchQuestion", search);
   const response = asRecord(unwrapBody(await client.analytics(params)));
-  const queries = Array.isArray(response.queries) ? response.queries : [];
+  const rawQueries = Array.isArray(response.queries) ? response.queries : [];
+  const queriesInWindow = rawQueries.filter((query) => {
+    const record = asRecord(query);
+    const timestamp = Date.parse(String(record.timestamp ?? ""));
+    return timestamp >= start.getTime() && timestamp <= end.getTime();
+  });
+  const matchingQueries = blockedOnly
+    ? queriesInWindow.filter((query) => asRecord(query).action === 0)
+    : queriesInWindow;
+  const queries = matchingQueries.slice(0, limit);
   return {
     window: { start: start.toISOString(), end: end.toISOString() },
     queries,
-    meta: response.meta ?? null,
+    meta: {
+      provider: response.meta ?? null,
+      scannedQueryCount: rawQueries.length,
+      matchingQueryCount: matchingQueries.length,
+      returnedQueryCount: queries.length,
+      resultLimit: limit,
+      sourcePageFull: rawQueries.length === 200,
+    },
   };
 }
 
