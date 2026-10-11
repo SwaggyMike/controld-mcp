@@ -216,7 +216,7 @@ export function registerTools(server: McpServer, client: ControlDClient): void {
         return {
           siteHostname,
           guidance:
-            "Review the timestamps and trigger fields. Modern pages often fail because a related CDN, login, media, or consent domain was blocked—not only the visible site.",
+            "Review the timestamps and trigger fields. Modern pages often fail because a related CDN, login, media, or consent domain was blocked—not only the visible site. A bypass rule applies to every endpoint that enforces this profile, not just the device that hit the block; use check_domain to confirm the result.",
           activity,
         };
       }),
