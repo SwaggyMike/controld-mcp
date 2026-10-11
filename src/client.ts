@@ -42,6 +42,47 @@ export class ControlDClient {
     );
   }
 
+  // Asks an endpoint's own DNS-over-HTTPS resolver how it would answer a name.
+  // This is not an API call: the resolver is public, so no token is sent.
+  async dnsVerdict(endpointId: string, hostname: string): Promise<unknown> {
+    if (!/^[a-z0-9]+$/iu.test(endpointId)) {
+      throw new ControlDApiError("Invalid Control D endpoint ID.");
+    }
+    const params = new URLSearchParams({
+      name: hostname,
+      type: "A",
+      controld: "1",
+      no_log: "1",
+    });
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://dns.controld.com/${endpointId}?${params.toString()}`,
+        {
+          headers: { Accept: "application/dns+json" },
+          signal: AbortSignal.timeout(this.config.timeoutMs),
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ControlDApiError(`Control D DNS lookup failed: ${message}`);
+    }
+    if (!response.ok) {
+      throw new ControlDApiError(
+        `Control D DNS lookup returned HTTP ${response.status}.`,
+        response.status,
+      );
+    }
+    try {
+      return await response.json();
+    } catch {
+      throw new ControlDApiError(
+        "Control D DNS lookup returned a non-JSON response.",
+        response.status,
+      );
+    }
+  }
+
   private async requestUrl(
     method: string,
     url: string,

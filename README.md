@@ -35,15 +35,18 @@ The MCP process can start without the token, but its tools will return a setup e
 1. “Show my Control D profiles.”
 2. “I just tried example.com. What was blocked in the last five minutes?”
 3. Review the query timestamps and the rule/filter that triggered each block.
-4. “Create a temporary bypass for `cdn.example.net` on Global for 30 minutes.”
-5. The assistant shows the exact proposed mutation and asks for approval before calling the confirmed write tool.
+4. “Would `cdn.example.net` be blocked?” `check_domain` answers immediately, with the filter, service, or rule that decides it, without waiting for real traffic.
+5. “Create a temporary bypass for `cdn.example.net` on Global for 30 minutes.”
+6. The assistant shows the exact proposed mutation and asks for approval before calling the confirmed write tool.
 
-For routing: list proxy locations first, then redirect either exact domain rules or a named service with an exact location ID. A service such as YouTube can involve many changing domains, so `set_service_policy` is usually safer than trying to maintain its hostnames manually.
+Existing custom rules can be switched off and back on with `set_rules_enabled`, which keeps their action and redirect target.
+
+For routing: list proxy locations first, then redirect either exact domain rules or a named service with an exact location ID. A service such as YouTube can involve many changing domains, so `set_service_policy` is usually safer than trying to maintain its hostnames manually. `list_profile_services` takes a `search` term to find a service without returning the whole catalog.
 
 ## Security design
 
 - No generic HTTP/API passthrough tool.
-- API and analytics hosts are constrained to Control D.
+- API and analytics hosts are constrained to Control D. `check_domain` queries the endpoint's own public resolver at `dns.controld.com` and sends no token.
 - Tokens are loaded at runtime and never returned or logged.
 - Activity-log requests are bounded to 200 rows and are never cached.
 - Writes require exact profile resolution and `confirm: true`.

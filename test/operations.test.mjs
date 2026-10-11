@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ControlDClient } from "../dist/client.js";
 import {
+  checkDomain,
   createRules,
   recentActivity,
   resolveProfile,
   setPause,
+  setRulesEnabled,
 } from "../dist/operations.js";
 
 const config = {
@@ -123,4 +125,72 @@ test("activity uses zero-based paging and filters blocked rows locally", async (
   assert.equal(result.queries.length, 1);
   assert.equal(result.queries[0].question, "blocked.example");
   assert.equal(result.meta.scannedQueryCount, 2);
+});
+
+test("domain check labels the verdict and sends no token to the resolver", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), headers: options.headers ?? {} });
+    if (String(url).startsWith("https://dns.controld.com/")) {
+      return json({
+        RCODE: 0,
+        answerRRs: [{ rdataA: "0.0.0.0" }],
+        controld: {
+          verdict: {
+            profileID: "p1",
+            verdictSource: "bl",
+            verdictAction: "0",
+            verdictMatch: "ads_small",
+          },
+        },
+      });
+    }
+    return json({ body: { devices: [{ PK: "abc123", name: "Router" }] } });
+  };
+  const result = await checkDomain(
+    new ControlDClient(config),
+    "https://Ads.Example.com/page",
+    "router",
+  );
+  assert.equal(result.domain, "ads.example.com");
+  assert.equal(result.results[0].verdict, "blocked");
+  assert.equal(result.results[0].decidedBy, "filter");
+  assert.equal(result.results[0].matched, "ads_small");
+  const lookup = requests.find((request) =>
+    request.url.startsWith("https://dns.controld.com/abc123?"),
+  );
+  assert.ok(lookup, "queries the endpoint's own resolver");
+  assert.equal(lookup.headers.Authorization, undefined);
+});
+
+test("enabling rules sends only the status and refuses unknown rules", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const puts = [];
+  globalThis.fetch = async (url, options) => {
+    if (options.method === "PUT") {
+      puts.push({ url: String(url), body: JSON.parse(options.body) });
+      return json({ body: {} });
+    }
+    if (String(url).endsWith("/rules/all")) {
+      return json({
+        body: { rules: [{ PK: "example.com", action: { do: 3, status: 1, via: "JFK" } }] },
+      });
+    }
+    return json({ body: { profiles: [{ PK: "p1", name: "Global" }] } });
+  };
+  await setRulesEnabled(new ControlDClient(config), "Global", ["Example.com"], false);
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].url, "https://api.controld.test/profiles/p1/rules/example.com");
+  assert.deepEqual(puts[0].body, { status: 0 });
+  await assert.rejects(
+    setRulesEnabled(new ControlDClient(config), "Global", ["missing.com"], true),
+    /No custom rule exists for: missing.com/u,
+  );
 });

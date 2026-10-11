@@ -62,10 +62,11 @@ export async function profileRules(
 export async function profileServices(
   client: ControlDClient,
   selector: string,
+  search?: string,
 ): Promise<unknown> {
   const profile = await resolveProfile(client, selector);
   const profileId = requiredId(profile, "profile");
-  const [states, catalog] = await Promise.all([
+  const [states, fullCatalog] = await Promise.all([
     bodyList(
       await client.request(
         "GET",
@@ -75,7 +76,102 @@ export async function profileServices(
     ),
     serviceCatalog(client),
   ]);
+  let catalog = fullCatalog;
+  if (search) {
+    const needle = search.trim().toLowerCase();
+    catalog = fullCatalog.filter((service) => {
+      const name = stringValue(service.name)?.toLowerCase() ?? "";
+      const id = itemId(service)?.toLowerCase() ?? "";
+      return name.includes(needle) || id.includes(needle);
+    });
+  }
   return { profileId, profileName: profile.name, states, catalog };
+}
+
+export async function endpoints(
+  client: ControlDClient,
+): Promise<Record<string, unknown>[]> {
+  return bodyList(await client.request("GET", "/devices"), "devices");
+}
+
+export async function resolveEndpoint(
+  client: ControlDClient,
+  selector: string,
+): Promise<Record<string, unknown>> {
+  const rows = await endpoints(client);
+  const needle = selector.trim().toLowerCase();
+  const matches = rows.filter((row) => {
+    const id = itemId(row)?.toLowerCase();
+    const name = stringValue(row.name)?.toLowerCase();
+    return id === needle || name === needle;
+  });
+  if (matches.length !== 1) {
+    throw new ControlDApiError(
+      matches.length === 0
+        ? `No endpoint matches ${selector}.`
+        : `Endpoint selector ${selector} is ambiguous.`,
+    );
+  }
+  return matches[0]!;
+}
+
+const verdictActionLabels: Record<string, string> = {
+  "0": "blocked",
+  "1": "bypassed",
+  "2": "spoofed",
+  "3": "redirected",
+};
+
+const verdictSourceLabels: Record<string, string> = {
+  bl: "filter",
+  rules: "custom rule",
+  svc: "service rule",
+  default: "default rule",
+};
+
+// Reports what Control D would do with a domain right now, without waiting
+// for real traffic. With no endpoint given, every endpoint is checked.
+export async function checkDomain(
+  client: ControlDClient,
+  site: string,
+  endpointSelector?: string,
+): Promise<unknown> {
+  const hostname = normalizeHostname(site);
+  if (hostname.startsWith("*.")) {
+    throw new ControlDApiError("check_domain needs an exact domain, not a wildcard.");
+  }
+  const targets = endpointSelector
+    ? [await resolveEndpoint(client, endpointSelector)]
+    : await endpoints(client);
+
+  const results = [];
+  for (const endpoint of targets) {
+    const endpointId = requiredId(endpoint, "endpoint");
+    const answer = asRecord(await client.dnsVerdict(endpointId, hostname));
+    const controld = asRecord(answer.controld ?? {});
+    const verdict = asRecord(controld.verdict ?? {});
+    const actionCodeText = stringValue(verdict.verdictAction);
+    const sourceCode = stringValue(verdict.verdictSource);
+    const answers = Array.isArray(answer.answerRRs)
+      ? answer.answerRRs
+          .map((row) => stringValue(asRecord(row).rdataA))
+          .filter((value) => value !== undefined)
+      : [];
+    results.push({
+      endpointId,
+      endpointName: endpoint.name,
+      verdict: actionCodeText
+        ? (verdictActionLabels[actionCodeText] ?? `action ${actionCodeText}`)
+        : "no matching policy (resolved normally)",
+      decidedBy: sourceCode
+        ? (verdictSourceLabels[sourceCode] ?? sourceCode)
+        : null,
+      matched: stringValue(verdict.verdictMatch) ?? null,
+      profileId: stringValue(verdict.profileID) ?? null,
+      answers,
+    });
+  }
+  return { domain: hostname, results };
 }
 
 export async function setServicePolicy(
@@ -201,6 +297,44 @@ export async function createRules(
   return {
     profileId: id,
     action,
+    hostnames: normalized,
+    verifiedRules: rules.filter((rule) =>
+      normalized.includes(ruleHostname(rule)),
+    ),
+  };
+}
+
+// Switches existing rules on or off. Only the status is sent: restating the
+// action is rejected for redirect rules and would strip their target.
+export async function setRulesEnabled(
+  client: ControlDClient,
+  selector: string,
+  hostnames: string[],
+  enabled: boolean,
+): Promise<unknown> {
+  const profile = await resolveProfile(client, selector);
+  const id = requiredId(profile, "profile");
+  const normalized = [...new Set(hostnames.map(normalizeHostname))];
+  const existing = new Set(
+    (await profileRules(client, id)).map((rule) => ruleHostname(rule)),
+  );
+  const missing = normalized.filter((hostname) => !existing.has(hostname));
+  if (missing.length > 0) {
+    throw new ControlDApiError(
+      `No custom rule exists for: ${missing.join(", ")}. Use list_profile_rules to see exact rule names.`,
+    );
+  }
+  for (const hostname of normalized) {
+    await client.request(
+      "PUT",
+      `/profiles/${encodeURIComponent(id)}/rules/${encodeURIComponent(hostname)}`,
+      { status: enabled ? 1 : 0 },
+    );
+  }
+  const rules = await profileRules(client, id);
+  return {
+    profileId: id,
+    enabled,
     hostnames: normalized,
     verifiedRules: rules.filter((rule) =>
       normalized.includes(ruleHostname(rule)),

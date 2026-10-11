@@ -1,6 +1,6 @@
 {
   "name": "controld-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A safety-focused MCP server for Control D DNS management and activity-log diagnosis",
   "type": "module",
   "private": true,

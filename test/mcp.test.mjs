@@ -24,6 +24,7 @@ test("advertises the complete guarded tool surface", async () => {
   assert.deepEqual(
     names.sort(),
     [
+      "check_domain",
       "check_setup",
       "create_block_rules",
       "create_bypass_rules",
@@ -38,6 +39,7 @@ test("advertises the complete guarded tool surface", async () => {
       "list_proxy_locations",
       "pause_profile",
       "resume_profile",
+      "set_rules_enabled",
       "set_service_policy",
     ].sort(),
   );
@@ -48,6 +50,7 @@ test("advertises the complete guarded tool surface", async () => {
     "create_block_rules",
     "create_redirect_rules",
     "delete_rules",
+    "set_rules_enabled",
     "set_service_policy",
   ]) {
     const tool = response.tools.find((candidate) => candidate.name === name);

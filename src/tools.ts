@@ -4,6 +4,7 @@ import { z } from "zod";
 import { bodyList, ControlDApiError, type ControlDClient } from "./client.js";
 import { hostnameFromContext } from "./domain.js";
 import {
+  checkDomain,
   createRules,
   deleteRules,
   profileRules,
@@ -12,6 +13,7 @@ import {
   proxyLocations,
   recentActivity,
   setPause,
+  setRulesEnabled,
   setServicePolicy,
 } from "./operations.js";
 
@@ -131,12 +133,38 @@ export function registerTools(server: McpServer, client: ControlDClient): void {
     {
       title: "List service policies",
       description:
-        "List the current profile service states plus the service catalog. Use this to resolve names such as YouTube to exact IDs.",
-      inputSchema: { profile },
+        "List the current profile service states plus the service catalog. Use this to resolve names such as YouTube to exact IDs. Pass search to filter the catalog, which is otherwise several hundred entries.",
+      inputSchema: {
+        profile,
+        search: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Case-insensitive text to match service names or IDs"),
+      },
       annotations: readOnly,
     },
-    async ({ profile: selector }) =>
-      run(() => profileServices(client, selector)),
+    async ({ profile: selector, search }) =>
+      run(() => profileServices(client, selector, search)),
+  );
+
+  server.registerTool(
+    "check_domain",
+    {
+      title: "Check how a domain is handled",
+      description:
+        "Ask Control D how it would answer a domain right now (blocked, bypassed, redirected, or resolved normally) and which filter, service, custom rule, or default rule decided it. Needs no real traffic. Checks every endpoint unless one is named.",
+      inputSchema: {
+        site: z.string().min(1).describe("A domain or URL"),
+        endpoint: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Exact endpoint name or ID; omit to check every endpoint"),
+      },
+      annotations: readOnly,
+    },
+    async ({ site, endpoint }) => run(() => checkDomain(client, site, endpoint)),
   );
 
   const activitySchema = {
@@ -302,6 +330,28 @@ export function registerTools(server: McpServer, client: ControlDClient): void {
         }),
       ),
   );
+  server.registerTool(
+    "set_rules_enabled",
+    {
+      title: "Enable or disable custom rules",
+      description:
+        "Switch existing custom rules on or off without deleting them. The rule's action and redirect target are kept. Requires confirm=true.",
+      inputSchema: {
+        profile,
+        hostnames: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(50)
+          .describe("Exact rule names as shown by list_profile_rules"),
+        enabled: z.boolean(),
+        confirm,
+      },
+      annotations: mutation,
+    },
+    async ({ profile: selector, hostnames: names, enabled }) =>
+      run(() => setRulesEnabled(client, selector, names, enabled)),
+  );
+
   server.registerTool(
     "delete_rules",
     {
